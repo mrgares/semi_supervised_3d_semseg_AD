@@ -63,7 +63,7 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
         # Adding normalized positional features to `feat` for compatibility with PVCNN
         max_coords = np.max(points, axis=0)
         norm_pos = points / max_coords if max_coords.all() > 0 else points
-        feat = np.concatenate([points, feat, norm_pos], axis=-1)
+        feat = np.concatenate([feat, norm_pos], axis=-1)
 
         # Random sampling for fixed point count
         num_points = 40960  # PVCNN's expected input count per point cloud
@@ -109,8 +109,8 @@ class CustomNuScenesSplit:
         
         # Prepare data dictionary for PVCNN format
         data = {
-            'point': pc,
-            'feat': np.zeros((pc.shape[0], 2)),
+            'point': pc[:, :3],  # Use only XYZ coordinates
+            'feat': pc[:, 3:],    # Use additional features (RGB, etc.)
             'label': labels
         }
         processed_data = self.dataset.preprocess(data, {'split': self.split})
