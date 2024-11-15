@@ -1,9 +1,10 @@
 import open3d.ml.torch as ml3d
 import numpy as np
 import os
-from nuscenes import NuScenes 
+from nuscenes import NuScenes
 from torch import from_numpy
 import torch
+
 class CustomNuScenes(ml3d.datasets.NuScenes):
     def __init__(self, dataset_path, info_path=None, use_cache=False, version="v1.0-mini", **kwargs):
         """Initialize the custom NuScenes dataset with reduced semantic labels."""
@@ -36,12 +37,52 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
         """Read and remap semantic labels for the point cloud."""
         sample = self.nusc.get('sample', info['token'])
         lidar_token = sample['data']['LIDAR_TOP']
-        print(self.nusc.get('sample_data', lidar_token)['filename'])
         lidarseg_record = self.nusc.get('lidarseg', lidar_token)
         lidarseg_filepath = os.path.join(self.dataset_path, lidarseg_record['filename'])
         semantic_labels = np.fromfile(lidarseg_filepath, dtype=np.uint8)
         remapped_labels = np.vectorize(self.map_to_new_class)(semantic_labels)
         return remapped_labels
+
+    def preprocess(self, data, attr):
+        """Data preprocessing for PVCNN, including subsampling and normalization."""
+        points = np.array(data['point'], dtype=np.float32)
+        
+        if 'label' not in data or data['label'] is None:
+            labels = np.zeros((points.shape[0],), dtype=np.int32)
+        else:
+            labels = np.array(data['label'], dtype=np.int32).reshape((-1,))
+
+        if 'feat' not in data or data['feat'] is None:
+            feat = points.copy()
+        else:
+            feat = np.array(data['feat'], dtype=np.float32)
+
+        points -= np.min(points, axis=0)  # Normalizing points to local coordinates
+        feat /= 255.0  # Normalizing features to [0, 1] if they are color values
+
+        # Adding normalized positional features to `feat` for compatibility with PVCNN
+        max_coords = np.max(points, axis=0)
+        norm_pos = points / max_coords if max_coords.all() > 0 else points
+        feat = np.concatenate([points, feat, norm_pos], axis=-1)
+
+        # Random sampling for fixed point count
+        num_points = 40960  # PVCNN's expected input count per point cloud
+        if points.shape[0] < num_points:
+            indices = np.random.choice(points.shape[0], num_points, replace=True)
+        else:
+            indices = np.random.choice(points.shape[0], num_points, replace=False)
+        points = points[indices]
+        feat = feat[indices]
+        labels = labels[indices]
+
+        return {'point': points, 'feat': feat, 'label': labels}
+
+    def transform(self, data, attr):
+        """Convert numpy arrays to torch Tensors for PVCNN input."""
+        data['point'] = torch.from_numpy(data['point']).float()
+        data['feat'] = torch.from_numpy(data['feat']).float()
+        data['label'] = torch.from_numpy(data['label']).long()
+        return data
 
     def get_split(self, split):
         """Return a dataset split with remapped semantic labels."""
@@ -60,20 +101,19 @@ class CustomNuScenesSplit:
         return len(self.infos)
 
     def __getitem__(self, idx):
-        """Allow indexing to retrieve samples in DataLoader."""
+        """Retrieve and process a single sample for DataLoader."""
         info = self.infos[idx]
         lidar_path = info['lidar_path']
         pc = self.dataset.read_lidar(lidar_path)
         labels = self.dataset.read_semantic_labels(info)
-
-        # Convert to tensors if not already
-        pc_tensor = from_numpy(pc) if not isinstance(pc, torch.Tensor) else pc
-        labels_tensor = from_numpy(labels) if not isinstance(labels, torch.Tensor) else labels
-
-        # Return data, omitting 'feat' or setting it as an empty array
+        
+        # Prepare data dictionary for PVCNN format
         data = {
-            'point': pc_tensor,
-            'feat': torch.empty((0,)),  # empty feature tensor if no features are used
-            'label': labels_tensor
+            'point': pc,
+            'feat': np.zeros((pc.shape[0], 2)),
+            'label': labels
         }
-        return data
+        processed_data = self.dataset.preprocess(data, {'split': self.split})
+        transformed_data = self.dataset.transform(processed_data, {'split': self.split})
+
+        return transformed_data

@@ -1,6 +1,3 @@
-torch==2.0.1+cu117
-torchvision==0.15.2+cu117
-torchaudio==2.0.2+cu117
 tensorboard
 numpy==1.26.4
 opencv-python
@@ -15,4 +12,4 @@ ipykernel
 torch-summary
 fiftyone
 nuscenes-devkit
-open3d
+# open3d

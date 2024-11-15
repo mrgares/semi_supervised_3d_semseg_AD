@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu22.04
                  
 # Set environment variables 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -40,10 +40,11 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 2
 # Set the working directory
 WORKDIR /workspace
 
-RUN pip install torch torchvision torchaudio
+RUN pip install torch==2.0.1+cu117 torchvision==0.15.2+cu117 torchaudio==2.0.2+cu117 --index-url https://download.pytorch.org/whl/cu117
 
 # Install any project-specific dependencies here
 COPY requirements.txt .
+RUN apt-get remove -y python3-blinker
 RUN pip install -r requirements.txt
 
 
