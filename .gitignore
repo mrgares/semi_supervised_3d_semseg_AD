@@ -164,3 +164,8 @@ cython_debug/
 Open3D-ML/
 cache/
 logs/
+*.pth
+*.vscode/
+wandb/
+kernels/
+Open3D/
