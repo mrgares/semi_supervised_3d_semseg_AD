@@ -4,6 +4,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from open3d.ml.torch.models import RandLANet
 from custom_nuscenes_RandLANet import CustomNuScenes
+
 import os
 import wandb
 import helpers
@@ -16,14 +17,14 @@ install()
 DATASET_ROOT = "/datastore/nuScenes/"
 PRETRAINED_WEIGHTS_PATH = "/workspace/pretrained_weights/randlanet_semantickitti_202201071330utc.pth"
 VERSION = "v1.0-trainval"
-BATCH_SIZE = 96
+BATCH_SIZE = 32
 NUM_EPOCHS = 20
-LEARNING_RATE = 1e-5#0.001
+LEARNING_RATE = 1e-3#0.001
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_OF_WORKERS = 8
 ### Model Parameters ###
 # Loss parameters
-FL_ALPHA_PER_CLASS = [0.01, 0.495, 0.495]  # Focal loss parameters
+FL_ALPHA_PER_CLASS = [0.01, 0.6, 0.39]  # Focal loss parameters
 FL_GAMMA = 2
 
 # Shared parameters for dataset and model
@@ -50,9 +51,9 @@ model = RandLANet(
     name="RandLANet",
     num_neighbors=NUM_NEIGHBORS,
     num_layers=NUM_LAYERS,
-    num_points=4096 * BATCH_SIZE,  # Based on batch size and expected points per sample
+    num_points=4096 * 2 * BATCH_SIZE,  # Based on batch size and expected points per sample
     num_classes=NUM_CLASSES,
-    ignored_label_inds=[0],  # Ignore class 0 (e.g., background)
+    ignored_label_inds=[],  # Ignore class 0 (e.g., background)
     sub_sampling_ratio=SUB_SAMPLING_RATIO,
     in_channels=3,  # Number of input feature dimensions (e.g., intensity)
     dim_features=DIM_FEATURES,
@@ -71,6 +72,10 @@ state_dict = pretrained_weights['model_state_dict']
 # Check if the classification head needs adjustment
 classification_head_key = 'fc1.3.conv.weight'  # Key for the classification head weights
 if state_dict[classification_head_key].shape[0] != NUM_CLASSES:
+    # freezed the pretrained weights except the classification head
+    # for key in state_dict.keys():
+    #     if 'fc1' not in key:
+    #         state_dict[key].requires_grad = False
     print(f"Adjusting the classification head for {NUM_CLASSES} classes.")
     model.fc1[-1] = torch.nn.Conv2d(32, NUM_CLASSES, kernel_size=1, bias=False).to(DEVICE)
 
@@ -102,7 +107,7 @@ val_loader = DataLoader(val_split, batch_size=BATCH_SIZE, shuffle=False, drop_la
 
 # Define loss function and optimizer
 class_weights = torch.tensor(FL_ALPHA_PER_CLASS)
-criterion = helpers.SemSegLoss()#(weights=class_weights.to(DEVICE))
+criterion = helpers.SemSegLoss(weights=class_weights.to(DEVICE))
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
 # Initialize WandB
@@ -175,8 +180,10 @@ for epoch in range(NUM_EPOCHS):
 
             # Get predictions
             preds = torch.argmax(predictions, dim=-1)  # Shape: (B, 4096)
-
-            # Flatten predictions and labels
+            # pred_counts = np.bincount(preds[0].cpu().numpy().flatten(), minlength=NUM_CLASSES)
+            # print(f"preds: {pred_counts}")
+            # label_counts = np.bincount(labels[0].cpu().numpy().flatten(), minlength=NUM_CLASSES)
+            # print(f"labels: {label_counts}")
             all_preds.append(preds.cpu().numpy().flatten())  
             all_labels.append(labels.cpu().numpy().flatten())
 

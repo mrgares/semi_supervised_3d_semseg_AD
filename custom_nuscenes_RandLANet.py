@@ -6,6 +6,12 @@ from nuscenes import NuScenes
 import torch
 from sklearn.neighbors import KDTree
 from open3d._ml3d.datasets.utils import DataProcessing
+# import random
+# np.random.seed(42)
+# torch.manual_seed(42)
+# random.seed(42)
+# if torch.cuda.is_available():
+#     torch.cuda.manual_seed_all(42)
 
 class CustomNuScenes(ml3d.datasets.NuScenes):
     def __init__(self, dataset_path, info_path=None, use_cache=False, cache_dir=".", version="v1.0-mini", 
@@ -56,7 +62,17 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
         labels = np.array(data['label'], dtype=np.int32).reshape((-1,))
         feat = np.array(data['feat'], dtype=np.float32) if 'feat' in data and data['feat'] is not None else None
 
-        # Perform grid subsampling
+        # Step 1: Restrict points to be within a specific distance range in BEV (XY plane)
+        min_bev_radius = 3.0   # Minimum radius to exclude points too close (e.g., hitting the vehicle)
+        max_bev_radius = 40.0  # Maximum radius to exclude far-away points
+        distances = np.sqrt(np.sum(points[:, :2] ** 2, axis=1))  # Compute distances in the XY plane
+        mask = (distances >= min_bev_radius) & (distances <= max_bev_radius)  # Mask for points in the desired range
+        points = points[mask]  # Apply the mask to the points
+        labels = labels[mask]  # Apply the mask to the labels
+        if feat is not None:
+            feat = feat[mask]  # Apply the mask to the features if they exist
+
+        # Step 2: Perform grid subsampling
         if feat is None:
             sub_points, sub_labels = DataProcessing.grid_subsampling(
                 points, labels=labels, grid_size=self.first_subsampling_dl)
@@ -65,11 +81,12 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
             sub_points, sub_feat, sub_labels = DataProcessing.grid_subsampling(
                 points, features=feat, labels=labels, grid_size=self.first_subsampling_dl)
 
-        # Create KDTree for nearest neighbor search
+        # Step 3: Create KDTree for nearest neighbor search
         search_tree = KDTree(sub_points)
         proj_inds = np.squeeze(
             search_tree.query(points, return_distance=False)).astype(np.int32)
 
+        # Step 4: Pack the preprocessed data
         data = {
             'point': sub_points,
             'feat': sub_feat,
@@ -79,9 +96,10 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
         }
         return data
 
+
     def transform(self, data, attr):
         """Transform data into RandLANet-compatible input with hierarchical downsampling."""
-        target_num_points = 4096 * 1 # Number of points for the first layer
+        target_num_points = 4096 * 2 # Number of points for the first layer
 
         # Step 1: Prepare the initial point cloud
         points = data['point']  # Original coordinates (XYZ)
