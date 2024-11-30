@@ -9,9 +9,19 @@ import os
 import wandb
 import helpers
 import numpy as np
+import warnings
 from rich.traceback import install
 
 install()
+
+
+warnings.filterwarnings(
+    "ignore",
+    message="MongoClient opened before fork. May not be entirely fork-safe",
+    category=UserWarning,
+    module="pymongo.mongo_client",
+)
+
 
 ### General Parameters ###
 DATASET_ROOT = "/datastore/nuScenes/"
@@ -22,6 +32,7 @@ NUM_EPOCHS = 20
 LEARNING_RATE = 1e-3#0.001
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_OF_WORKERS = 8
+PSEUDO_LABEL_RATIO = 0.75
 ### Model Parameters ###
 # Loss parameters
 FL_ALPHA_PER_CLASS = [0.01, 0.6, 0.39]  # Focal loss parameters
@@ -29,7 +40,7 @@ FL_GAMMA = 2
 
 # Shared parameters for dataset and model
 FIRST_SUBSAMPLING_DL = 0.1  # Grid size for subsampling
-NUM_NEIGHBORS = 16          # Number of nearest neighbors
+NUM_NEIGHBORS = 32          # Number of nearest neighbors
 NUM_LAYERS = 4              # Number of encoder/decoder layers
 SUB_SAMPLING_RATIO = [4, 4, 4, 4]  # Downsampling ratio per layer
 NUM_CLASSES = 3             # Number of semantic classes
@@ -100,7 +111,7 @@ dataset = CustomNuScenes(
 )
 
 label_to_names_dict = dataset.label_to_names
-train_split = dataset.get_split("train")
+train_split = dataset.get_split("train", pseudo_label_ratio=PSEUDO_LABEL_RATIO)
 val_split = dataset.get_split("val")
 train_loader = DataLoader(train_split, batch_size=BATCH_SIZE, shuffle=True, drop_last=True,num_workers=NUM_OF_WORKERS, pin_memory=True) #collate_fn=helpers.randlanet_collate_fn)
 val_loader = DataLoader(val_split, batch_size=BATCH_SIZE, shuffle=False, drop_last=False,num_workers=NUM_OF_WORKERS, pin_memory=True)# collate_fn=helpers.randlanet_collate_fn)
@@ -119,7 +130,7 @@ wandb.init(
         "learning_rate": LEARNING_RATE,
         "model": "RandLANet",
     },
-    name=f"RandLANet_bs:{BATCH_SIZE}_lr:{LEARNING_RATE}_ep:{NUM_EPOCHS}_cel_class_weights:{class_weights}",
+    name=f"[pseudo labels:{PSEUDO_LABEL_RATIO*100}%] RandLANet_bs:{BATCH_SIZE}_lr:{LEARNING_RATE}_ep:{NUM_EPOCHS}_cel_class_weights:{class_weights}",
 )
 
 # Track the model in WandB

@@ -6,6 +6,9 @@ from nuscenes import NuScenes
 import torch
 from sklearn.neighbors import KDTree
 from open3d._ml3d.datasets.utils import DataProcessing
+import fiftyone as fo
+from numpy.random import default_rng
+
 # import random
 # np.random.seed(42)
 # torch.manual_seed(42)
@@ -23,6 +26,7 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
         self.num_neighbors = num_neighbors
         self.num_layers = num_layers
         self.sub_sampling_ratio = sub_sampling_ratio
+        self.fo_lidar_dataset = fo.load_dataset("nuscenes").select_group_slices("LIDAR_TOP")
 
     @staticmethod
     def get_label_to_names():
@@ -159,26 +163,47 @@ class CustomNuScenes(ml3d.datasets.NuScenes):
             'interp_idx': input_up_samples,       # List of tensors
             'features': torch.tensor(features, dtype=torch.float32),  # Tensor with normalized intensity + normalized coords
             'labels': torch.tensor(labels, dtype=torch.int64),        # Tensor
-            'filename': data['filename']  # Original filename
+            'filename': data['filename'],  # Original filename
+            'labels_type': data['labels_type']  # Original or pseudo labels
         }
 
 
+    def get_pseudo_label(self, info):
+        sample = self.nusc.get('sample', info['token'])
+        lidar_token = sample['data']['LIDAR_TOP']
+        dataview_lidar = self.fo_lidar_dataset.match({"sample_token":lidar_token})
+        if len(dataview_lidar) == 0:
+            # print(f"No pseudo label found for {lidar_token}")
+            pseudo_label = self.read_semantic_labels(info)
+        else:
+            # print(f"!!! Pseudo label found for {lidar_token}")
+            pseudo_label = self.fo_lidar_dataset.match({"sample_token":lidar_token}).first()['pseudo_label']
+        return pseudo_label
 
 
-
-    def get_split(self, split):
+    def get_split(self, split, pseudo_label_ratio=0.0):
         """Return a dataset split."""
-        return CustomNuScenesSplit(self, split=split)
+        return CustomNuScenesSplit(self, split=split, pseudo_label_ratio=pseudo_label_ratio)
 
 
 class CustomNuScenesSplit:
-    def __init__(self, dataset, split='train'):
+    def __init__(self, dataset:CustomNuScenes, split='train', pseudo_label_ratio=0.0):
         self.dataset = dataset
         self.split = split
         self.infos = dataset.get_split_list(split)
 
         if not self.infos:
             raise ValueError(f"No data found for the '{split}' split. Please check dataset paths and split names.")
+        
+        # Select indices for pseudo labels based on the ratio
+        if split == 'train':
+            num_samples = len(self.infos)
+            num_pseudo = int(pseudo_label_ratio * num_samples)
+            rng = default_rng(42) # Seed the random number generator for reproducibility
+            self.pseudo_label_indices = set(rng.choice(num_samples, num_pseudo, replace=False))
+        else:
+            # all indices are original labels
+            self.pseudo_label_indices = set()
 
     def __len__(self):
         return len(self.infos)
@@ -188,8 +213,13 @@ class CustomNuScenesSplit:
         info = self.infos[idx]
         lidar_path = info['lidar_path']
         pc = self.dataset.read_lidar(lidar_path)
-        labels = self.dataset.read_semantic_labels(info)
-
+        if idx in self.pseudo_label_indices:
+            labels = self.dataset.get_pseudo_label(info)
+            labels_type = "pseudo"    
+        else:
+            labels = self.dataset.read_semantic_labels(info)
+            labels_type = "original"
+        
         # Prepare data dictionary
         data = {
             'point': pc[:, :3],  # Use XYZ coordinates
@@ -198,4 +228,5 @@ class CustomNuScenesSplit:
         }
         processed_data = self.dataset.preprocess(data, {'split': self.split})
         processed_data['filename'] = lidar_path
+        processed_data['labels_type'] = labels_type
         return self.dataset.transform(processed_data, {'split': self.split})
